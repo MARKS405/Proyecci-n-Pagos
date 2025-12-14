@@ -9,7 +9,7 @@ def prepare_series(df: pd.DataFrame, freq = "D") -> pd.Series:
     Espera df ya filtrado por BANCO/MONEDA/DiaNombre.
     Devuelve una serie indexada por FECHA (suma por fecha).
     """
-    df["Monto"] = -df["Valor"]
+    df["MONTO"] = -df["Valor"]
     dff = df[["FECHA", "MONTO"]].copy()
     s = dff.groupby("FECHA")["MONTO"].sum().sort_index()
     s.index = pd.to_datetime(s.index)
@@ -79,3 +79,4 @@ def forecast_sarima(series: pd.Series, steps: int = 30, s: int = 7):
     fcst = model.get_forecast(steps=steps).predicted_mean
 
     return y, fcst
+
