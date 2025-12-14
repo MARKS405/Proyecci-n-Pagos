@@ -101,7 +101,7 @@ with col2:
 
 st.subheader("🔮 Forecast")
 
-series = prepare_series(dff)
+series = prepare_series(dff, freq="D")
 
 if len(series) < 8:
     st.info("Muy pocos puntos para un forecast estable. Prueba filtrar por un solo día (Tuesday o Friday) y por banco/moneda.")
@@ -122,3 +122,4 @@ else:
     plot_df = hist._append(pred, ignore_index=True)
     fig2 = px.line(plot_df, x="FECHA", y="Valor", color="Tipo", title=f"Forecast — {model_name}")
     st.plotly_chart(fig2, use_container_width=True)
+
