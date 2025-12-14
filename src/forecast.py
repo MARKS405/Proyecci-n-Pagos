@@ -4,13 +4,19 @@ from statsmodels.tsa.holtwinters import ExponentialSmoothing
 from statsmodels.tsa.statespace.sarimax import SARIMAX
 
 
-def prepare_series(df: pd.DataFrame) -> pd.Series:
-    """
+def prepare_series(df: pd.DataFrame, freq = "D") -> pd.Series:
+     """
     Espera df ya filtrado por BANCO/MONEDA/DiaNombre.
     Devuelve una serie indexada por FECHA (suma por fecha).
     """
-    s = df.groupby("FECHA")["Valor"].sum().sort_index()
+    df["Monto"] = -df["Valor"]
+    dff = df[["FECHA", "MONTO"]].copy()
+    s = dff.groupby("FECHA")["MONTO"].sum().sort_index()
     s.index = pd.to_datetime(s.index)
+    if freq is not None:
+        idx = pd.date_range(start=s.index.min(), end=s.index.max(), freq=freq)
+        s = s.reindex(idx, fill_value=0.0)
+
     return s
 
 
@@ -42,9 +48,9 @@ def to_regular_weekly(series: pd.Series) -> pd.Series:
     return y
 
 
-def forecast_holt_winters(series: pd.Series, steps: int = 10, seasonal_periods: int = 52):
+def forecast_holt_winters(series: pd.Series, steps: int = 30, seasonal_periods: int = 7):
     """
-    Holt-Winters aditivo con tendencia y estacionalidad anual (52 semanas).
+    Holt-Winters aditivo con tendencia y estacionalidad semanal.
     """
     y = to_regular_weekly(series)
     model = ExponentialSmoothing(
@@ -57,7 +63,7 @@ def forecast_holt_winters(series: pd.Series, steps: int = 10, seasonal_periods: 
     return y, fcst
 
 
-def forecast_sarima(series: pd.Series, steps: int = 10, s: int = 52):
+def forecast_sarima(series: pd.Series, steps: int = 30, s: int = 7):
     """
     SARIMA básico como punto de partida.
     Luego lo calibramos con grid search o auto_arima si deseas.
@@ -71,4 +77,5 @@ def forecast_sarima(series: pd.Series, steps: int = 10, s: int = 52):
         enforce_invertibility=False
     ).fit(disp=False)
     fcst = model.get_forecast(steps=steps).predicted_mean
+
     return y, fcst
