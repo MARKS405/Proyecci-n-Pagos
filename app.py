@@ -69,33 +69,55 @@ if df.empty:
     st.warning("No se encontraron datos. Revisa el contenido del ZIP o la ruta, y que exista la hoja 'RESUMEN'.")
     st.stop()
 
+# Traducción de días a español
+MAP_DIAS = {
+    "Monday": "Lunes",
+    "Tuesday": "Martes",
+    "Wednesday": "Miércoles",
+    "Thursday": "Jueves",
+    "Friday": "Viernes",
+    "Saturday": "Sábado",
+    "Sunday": "Domingo",
+}
+
+df["DiaNombre_ES"] = df["DiaNombre"].map(MAP_DIAS)
+
 # Filtros
 bancos = sorted(df["BANCO"].dropna().unique().tolist())
 monedas = sorted(df["MONEDA"].dropna().unique().tolist())
-dias = sorted(df["DiaNombre"].dropna().unique().tolist())
+dias = sorted(df["DiaNombre_ES"].dropna().unique().tolist())
+
+# Defaults
+default_banco = ["SCOTIABANK"] if "SCOTIABANK" in bancos else bancos
+default_moneda = ["PEN"] if "PEN" in monedas else monedas
+default_dia = ["Viernes"] if "Viernes" in dias else dias
 
 with st.sidebar:
     st.header("Filtros")
-    banco_sel = st.multiselect("Banco", bancos, default=bancos)
-    moneda_sel = st.multiselect("Moneda", monedas, default=monedas)
-    dia_sel = st.multiselect("Día de semana", dias, default=dias)
+    banco_sel = st.multiselect("Banco", bancos, default=default_banco)
+    moneda_sel = st.multiselect("Moneda", monedas, default=default_moneda)
+    dia_sel = st.multiselect("Día de la semana", dias, default=default_dia)
 
 dff = df[
     df["BANCO"].isin(banco_sel)
     & df["MONEDA"].isin(moneda_sel)
-    & df["DiaNombre"].isin(dia_sel)
+    & df["DiaNombre_ES"].isin(dia_sel)
 ].copy()
+
 
 col1, col2 = st.columns([2, 1])
 
 with col1:
-    ts = dff.groupby("FECHA")["Valor"].sum().reset_index().sort_values("FECHA")
-    fig = px.line(ts, x="FECHA", y="Valor", title="Serie histórica (suma según filtros)")
+    ts = (dff.groupby("FECHA")["Valor"].sum().reset_index().sort_values("FECHA")    )
+    ts["Monto"] = -ts["Valor"]  # positivo para visualización
+
+    fig = px.line(ts, x="FECHA", y="Monto", title="Serie histórica (egresos, valores positivos)")
     st.plotly_chart(fig, use_container_width=True)
+
 
 with col2:
     st.metric("Registros (filtrados)", len(dff))
-    st.metric("Suma total (filtrada)", f"{dff['Valor'].sum():,.2f}")
+    st.metric("Suma total (filtrada)", f"{(-dff['Valor'].sum()):,.2f}")
     st.write("Muestra (formato largo):")
     st.dataframe(dff.sort_values("FECHA").tail(20), use_container_width=True)
 
@@ -122,4 +144,5 @@ else:
     plot_df = hist._append(pred, ignore_index=True)
     fig2 = px.line(plot_df, x="FECHA", y="Valor", color="Tipo", title=f"Forecast — {model_name}")
     st.plotly_chart(fig2, use_container_width=True)
+
 
