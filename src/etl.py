@@ -111,5 +111,24 @@ def load_payments_folder(base_folder: str | Path) -> pd.DataFrame:
 
     # Día de la semana (en inglés por defecto: Tuesday, Friday)
     long_df["DiaNombre"] = long_df["FECHA"].dt.day_name()
+    def load_payments_folders(base_folders: list[str | Path]) -> pd.DataFrame:
+
+    """
+    Carga y concatena varias carpetas (ej. 2024 y 2025).
+    Devuelve la misma tabla larga:
+    FECHA | BANCO | MONEDA | Valor | DiaNombre
+    """
+    dfs = []
+    for folder in base_folders:
+        df = load_payments_folder(folder)
+        if not df.empty:
+            dfs.append(df)
+
+    if not dfs:
+        return pd.DataFrame(columns=["FECHA", "BANCO", "MONEDA", "Valor", "DiaNombre"])
+
+    out = pd.concat(dfs, ignore_index=True)
+    out = out.sort_values("FECHA")
+    return out
 
     return long_df
