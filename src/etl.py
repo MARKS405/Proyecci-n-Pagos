@@ -4,8 +4,10 @@ import re
 from pathlib import Path
 import pandas as pd
 
-# Orden esperado de columnas en el "TOTAL A PAGAR" (Column2..Column11)
-BANK_COLS_ORDER = [
+BANKS_ALLOWED = {"BCP", "SCOTIABANK", "SANTANDER", "INTERBANK", "TOTAL"}
+CCY_ALLOWED = {"PEN", "USD"}
+
+FINAL_COLS = [
     "BCP_PEN", "BCP_USD",
     "SCOTIABANK_PEN", "SCOTIABANK_USD",
     "SANTANDER_PEN", "SANTANDER_USD",
@@ -14,13 +16,7 @@ BANK_COLS_ORDER = [
 ]
 
 
-# -------------------------------------------------
-# Utilidades
-# -------------------------------------------------
 def _extract_date_from_path(path: Path) -> pd.Timestamp | None:
-    """
-    Busca un patrón dd.mm.yyyy en el path (carpetas o nombre del archivo).
-    """
     m = re.search(r"(\d{2})\.(\d{2})\.(\d{4})", str(path))
     if not m:
         return None
@@ -28,36 +24,12 @@ def _extract_date_from_path(path: Path) -> pd.Timestamp | None:
     return pd.to_datetime(f"{dd}/{mm}/{yyyy}", dayfirst=True, errors="coerce")
 
 
-def _read_total_a_pagar_row(xlsx_path: Path, sheet_name: str = "RESUMEN") -> pd.Series | None:
-    """
-    Lee la hoja RESUMEN (sin header) y devuelve la fila 'TOTAL A PAGAR'.
-    """
-    try:
-        df = pd.read_excel(xlsx_path, sheet_name=sheet_name, header=None, engine="openpyxl")
-    except Exception:
-        return None
-
-    mask = df.apply(
-        lambda r: r.astype(str).str.strip().str.upper().eq("TOTAL A PAGAR").any(),
-        axis=1
-    )
-    if not mask.any():
-        return None
-
-    return df.loc[mask].iloc[0]
-
-
 def _coerce_money(x) -> float:
-    """
-    Convierte '-', '', NaN a 0.0 y limpia separadores.
-    """
     if pd.isna(x):
         return 0.0
-
     s = str(x).strip()
     if s in {"-", ""}:
         return 0.0
-
     s = s.replace(",", "")
     try:
         return float(s)
@@ -65,14 +37,51 @@ def _coerce_money(x) -> float:
         return 0.0
 
 
-# -------------------------------------------------
-# ETL por carpeta individual (ej. 2024 o 2025)
-# -------------------------------------------------
+def _read_total_a_pagar_wide(xlsx_path: Path, sheet_name: str = "RESUMEN") -> dict | None:
+    """
+    Lee 'RESUMEN' y devuelve un dict wide con las claves tipo:
+    BCP_PEN, BCP_USD, SCOTIABANK_PEN, ..., TOTAL_USD
+    Usando headers (banco/moneda), no posiciones.
+    """
+    try:
+        df = pd.read_excel(xlsx_path, sheet_name=sheet_name, header=None, engine="openpyxl")
+    except Exception:
+        return None
+
+    # ubicar fila TOTAL A PAGAR
+    mask = df.apply(
+        lambda r: r.astype(str).str.strip().str.upper().eq("TOTAL A PAGAR").any(),
+        axis=1
+    )
+    if not mask.any():
+        return None
+
+    row_idx = df.index[mask][0]
+
+    # Asumimos: fila banco = row_idx-2, fila moneda = row_idx-1 (según tu plantilla)
+    if row_idx < 2:
+        return None
+
+    hdr_bank = df.loc[row_idx - 2]
+    hdr_ccy = df.loc[row_idx - 1]
+    values = df.loc[row_idx]
+
+    wide = {}
+    for col in df.columns:
+        bank = str(hdr_bank[col]).strip().upper()
+        ccy = str(hdr_ccy[col]).strip().upper()
+
+        if bank in BANKS_ALLOWED and ccy in CCY_ALLOWED:
+            wide[f"{bank}_{ccy}"] = _coerce_money(values[col])
+
+    # completar faltantes con 0.0 para estabilidad
+    for k in FINAL_COLS:
+        wide.setdefault(k, 0.0)
+
+    return wide
+
+
 def load_payments_folder(base_folder: str | Path) -> pd.DataFrame:
-    """
-    Devuelve tabla larga:
-    FECHA | BANCO | MONEDA | Valor | DiaNombre
-    """
     base = Path(base_folder)
     files = [p for p in base.rglob("*.xlsx") if not p.name.startswith("~$")]
 
@@ -82,30 +91,19 @@ def load_payments_folder(base_folder: str | Path) -> pd.DataFrame:
         if fecha is None or pd.isna(fecha):
             continue
 
-        total_row = _read_total_a_pagar_row(f)
-        if total_row is None:
+        wide_vals = _read_total_a_pagar_wide(f, sheet_name="RESUMEN")
+        if wide_vals is None:
             continue
 
-        vals = total_row.iloc[1:11].tolist()
-        if len(vals) != 10:
-            continue
-
-        wide = {"FECHA": fecha}
-        for col_name, v in zip(BANK_COLS_ORDER, vals):
-            wide[col_name] = _coerce_money(v)
-
-        rows.append(wide)
+        wide_vals["FECHA"] = fecha
+        rows.append(wide_vals)
 
     if not rows:
         return pd.DataFrame(columns=["FECHA", "BANCO", "MONEDA", "Valor", "DiaNombre"])
 
     wide_df = pd.DataFrame(rows).sort_values("FECHA")
 
-    long_df = wide_df.melt(
-        id_vars=["FECHA"],
-        var_name="Atributo",
-        value_name="Valor"
-    )
+    long_df = wide_df.melt(id_vars=["FECHA"], var_name="Atributo", value_name="Valor")
 
     long_df[["BANCO", "MONEDA"]] = long_df["Atributo"].str.split("_", n=1, expand=True)
     long_df = long_df.drop(columns=["Atributo"])
@@ -115,13 +113,7 @@ def load_payments_folder(base_folder: str | Path) -> pd.DataFrame:
     return long_df
 
 
-# -------------------------------------------------
-# ETL multi-año (2024 + 2025)
-# -------------------------------------------------
 def load_payments_folders(base_folders: list[str | Path]) -> pd.DataFrame:
-    """
-    Carga y concatena varias carpetas (ej. ['2024', '2025']).
-    """
     dfs = []
     for folder in base_folders:
         df = load_payments_folder(folder)
@@ -131,6 +123,5 @@ def load_payments_folders(base_folders: list[str | Path]) -> pd.DataFrame:
     if not dfs:
         return pd.DataFrame(columns=["FECHA", "BANCO", "MONEDA", "Valor", "DiaNombre"])
 
-    out = pd.concat(dfs, ignore_index=True)
-    out = out.sort_values("FECHA")
+    out = pd.concat(dfs, ignore_index=True).sort_values("FECHA")
     return out
