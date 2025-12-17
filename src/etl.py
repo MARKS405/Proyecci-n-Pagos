@@ -4,7 +4,7 @@ import re
 from pathlib import Path
 import pandas as pd
 
-# Orden esperado de columnas en el "TOTAL A PAGAR" (equivalente a Column2..Column11)
+# Orden esperado de columnas en el "TOTAL A PAGAR" (Column2..Column11)
 BANK_COLS_ORDER = [
     "BCP_PEN", "BCP_USD",
     "SCOTIABANK_PEN", "SCOTIABANK_USD",
@@ -14,10 +14,12 @@ BANK_COLS_ORDER = [
 ]
 
 
+# -------------------------------------------------
+# Utilidades
+# -------------------------------------------------
 def _extract_date_from_path(path: Path) -> pd.Timestamp | None:
     """
     Busca un patrón dd.mm.yyyy en el path (carpetas o nombre del archivo).
-    Ej: ...\\DICIEMBRE\\12.12.2025\\PAGOS FINANZAS 12.12.2025 Vf.xlsx
     """
     m = re.search(r"(\d{2})\.(\d{2})\.(\d{4})", str(path))
     if not m:
@@ -28,14 +30,13 @@ def _extract_date_from_path(path: Path) -> pd.Timestamp | None:
 
 def _read_total_a_pagar_row(xlsx_path: Path, sheet_name: str = "RESUMEN") -> pd.Series | None:
     """
-    Lee la hoja RESUMEN sin header (header=None) y devuelve la fila donde aparece 'TOTAL A PAGAR'.
+    Lee la hoja RESUMEN (sin header) y devuelve la fila 'TOTAL A PAGAR'.
     """
     try:
         df = pd.read_excel(xlsx_path, sheet_name=sheet_name, header=None, engine="openpyxl")
     except Exception:
         return None
 
-    # Detecta fila donde ANY celda == "TOTAL A PAGAR" (limpiando espacios y mayúsculas)
     mask = df.apply(
         lambda r: r.astype(str).str.strip().str.upper().eq("TOTAL A PAGAR").any(),
         axis=1
@@ -48,8 +49,7 @@ def _read_total_a_pagar_row(xlsx_path: Path, sheet_name: str = "RESUMEN") -> pd.
 
 def _coerce_money(x) -> float:
     """
-    Convierte valores tipo '-', '', NaN a 0.0.
-    Limpia separadores típicos y convierte a float.
+    Convierte '-', '', NaN a 0.0 y limpia separadores.
     """
     if pd.isna(x):
         return 0.0
@@ -58,18 +58,19 @@ def _coerce_money(x) -> float:
     if s in {"-", ""}:
         return 0.0
 
-    # Si el Excel viene con comas de miles, las removemos
     s = s.replace(",", "")
-
     try:
         return float(s)
     except ValueError:
         return 0.0
 
 
+# -------------------------------------------------
+# ETL por carpeta individual (ej. 2024 o 2025)
+# -------------------------------------------------
 def load_payments_folder(base_folder: str | Path) -> pd.DataFrame:
     """
-    Devuelve tabla en formato largo:
+    Devuelve tabla larga:
     FECHA | BANCO | MONEDA | Valor | DiaNombre
     """
     base = Path(base_folder)
@@ -81,12 +82,10 @@ def load_payments_folder(base_folder: str | Path) -> pd.DataFrame:
         if fecha is None or pd.isna(fecha):
             continue
 
-        total_row = _read_total_a_pagar_row(f, sheet_name="RESUMEN")
+        total_row = _read_total_a_pagar_row(f)
         if total_row is None:
             continue
 
-        # Equivalente a quedarte con Column2..Column11 (10 columnas)
-        # En python (0-based): iloc[1:11] => posiciones 1..10
         vals = total_row.iloc[1:11].tolist()
         if len(vals) != 10:
             continue
@@ -102,21 +101,26 @@ def load_payments_folder(base_folder: str | Path) -> pd.DataFrame:
 
     wide_df = pd.DataFrame(rows).sort_values("FECHA")
 
-    # Unpivot (melt) -> Atributo = "BCP_PEN", etc.
-    long_df = wide_df.melt(id_vars=["FECHA"], var_name="Atributo", value_name="Valor")
+    long_df = wide_df.melt(
+        id_vars=["FECHA"],
+        var_name="Atributo",
+        value_name="Valor"
+    )
 
-    # Split por "_" -> BANCO, MONEDA
     long_df[["BANCO", "MONEDA"]] = long_df["Atributo"].str.split("_", n=1, expand=True)
     long_df = long_df.drop(columns=["Atributo"])
 
-    # Día de la semana (en inglés por defecto: Tuesday, Friday)
     long_df["DiaNombre"] = long_df["FECHA"].dt.day_name()
-    def load_payments_folders(base_folders: list[str | Path]) -> pd.DataFrame:
 
+    return long_df
+
+
+# -------------------------------------------------
+# ETL multi-año (2024 + 2025)
+# -------------------------------------------------
+def load_payments_folders(base_folders: list[str | Path]) -> pd.DataFrame:
     """
-    Carga y concatena varias carpetas (ej. 2024 y 2025).
-    Devuelve la misma tabla larga:
-    FECHA | BANCO | MONEDA | Valor | DiaNombre
+    Carga y concatena varias carpetas (ej. ['2024', '2025']).
     """
     dfs = []
     for folder in base_folders:
@@ -130,5 +134,3 @@ def load_payments_folder(base_folder: str | Path) -> pd.DataFrame:
     out = pd.concat(dfs, ignore_index=True)
     out = out.sort_values("FECHA")
     return out
-
-    return long_df
